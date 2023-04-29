@@ -23,11 +23,12 @@ int         problem;
 fd_set      fds1;
 fd_set      fds2;
 
-
-void putstr_fd( int fd, char *str ) { write(fd, str, strlen(str)); }
+void putstr_fd( int fd, const char *str ) {
+    if ( str == NULL ) { return; }
+    write(fd, str, strlen(str) + 1);
+}
 
 void    clean_all( void ) {
-    close(sockfd);
     while(lst) {
         t_client *temp = lst->next;
         close(lst->fd);
@@ -36,6 +37,8 @@ void    clean_all( void ) {
         free(lst);
         lst = temp;
     }
+    if (sockfd > 0)
+        close(sockfd);
 }
 
 void    init_set() {
@@ -48,21 +51,35 @@ void    init_set() {
         FD_SET(temp->fd, &fds1);
         FD_SET(temp->fd, &fds2);
     }
+    for (t_client *temp = lst; temp; temp = temp->next) {
+        if (FD_ISSET(temp->fd, &fds1) == 0) {
+            problem = 1;
+            break ;
+        }
+    }            
 }
 
 void    flush_buff( t_client *client ) {
     if (!client->buff) 
         return ;
-    int retval = send(client->fd, client->buff, strlen(client->buff), 0);
-    if (retval == -1) {
-        problem = 1;
-        return ;
+    int bytes_to_send = strlen(client->buff);
+    char *str = client->buff;
+    while (bytes_to_send > 0) {
+        int retval = send(client->fd, client->buff, bytes_to_send, 0);
+        if (retval == -1) {
+            problem = 1;
+            return ;
+        }
+        client->buff += retval;
+        bytes_to_send -= retval;
     }
+    client->buff = str;
     free(client->buff);
     client->buff = NULL;
 }
 
 void    add_to_buff( t_client *dest, char *str) {
+    if (!dest || !str) { return ; }
     if (!dest->buff) {
         dest->buff = calloc(strlen(str) + 1, 1);
         if (!dest->buff) {
@@ -72,20 +89,22 @@ void    add_to_buff( t_client *dest, char *str) {
         strcpy(dest->buff, str);
     }
     else {
-        dest->buff = realloc(dest->buff, strlen(dest->buff) + strlen(str) + 1);
-        if (!dest->buff) {
+        char *new_buff = realloc(dest->buff, strlen(dest->buff) + strlen(str) + 1);
+        if (!new_buff) {
             problem = 1;
             return ;
         }
+        dest->buff = new_buff;
         strcat(dest->buff, str);
     }
 }
 
 void    add_to_all( int client_id, char *str) {
+    if (str == NULL)
+        return ;
     for (t_client *temp = lst; temp; temp = temp->next) {
-        if (temp->id == client_id)
-            continue;
-        add_to_buff(temp, str);
+        if (temp->id != client_id)
+            add_to_buff(temp, str);
     }
 }
 
@@ -113,7 +132,7 @@ void    accept_connection() {
     char temp_str[1024];
     bzero(temp_str, 1024);
     sprintf(temp_str, "server: client %d just arrived\n", new_client->id);
-    printf("debug: [%s]\n", temp_str);
+    // printf("debug: [%s]\n", temp_str);
     add_to_all(new_client->id, temp_str);
 }
 
@@ -121,7 +140,7 @@ void    client_quit( t_client *client ) {
     char temp_str[1024];
     bzero(temp_str, sizeof temp_str);
     sprintf(temp_str, "server: client %d just left\n", client->id);
-    printf("debug [%s]\n", temp_str);
+    // printf("debug [%s]\n", temp_str);
     add_to_all(client->id, temp_str);
     if (problem)
         return ;
@@ -145,11 +164,11 @@ void send_msg( t_client *client, char *str ) {
         if (!it)
             break ;
         size_t len = 0;
-            char *temp = str;
-            while (temp != it) {
-                temp++;
-                len++;
-            }
+        char *temp = str;
+        while (temp != it) {
+            temp++;
+            len++;
+        }
         char *temp2 = calloc(len + 1, 1);
         if (!temp2) {
             problem = 1;
@@ -173,6 +192,7 @@ void send_msg( t_client *client, char *str ) {
         }
         strcat(result, temp2);
         strcat(result, "\n");
+        // printf("debug: [%s]\n", result);
         add_to_all(client->id, result);
         if (problem)
             break ;
@@ -192,7 +212,7 @@ int    accept_input( t_client *client ) {
         client_quit(client);
         return 1;
     }
-    printf("debug: [%s]\n", result);
+    // printf("debug: [%s]\n", result);
     send_msg(client, result);
     return (0);
 }
@@ -210,8 +230,11 @@ void routine( void ) {
             return ;
         for ( t_client *temp = lst; temp; temp = temp->next ) {
             if (FD_ISSET(temp->fd, &fds1)) {
-                if (temp->fd == sockfd)
+                if (temp->fd == sockfd) {
                     accept_connection();
+                    if (problem)
+                        return ;
+                }
                 else {
                     if (accept_input(temp))
                         break ;
